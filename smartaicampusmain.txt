@@ -1,0 +1,342 @@
+from tkinter import *
+from tkinter import ttk, filedialog
+from PIL import Image, ImageTk
+import os
+import PyPDF2
+import math
+from transformers import pipeline, logging as hf_logging
+import threading
+import pandas as pd
+from datetime import datetime
+import time
+
+hf_logging.set_verbosity_error()
+print("Loading.....")
+time.sleep(2)
+print("Please Wait.....")
+
+class StudentAssistApp:
+    def _init_(self, root):
+        self.root = root
+        self.root.geometry("800x600")
+        self.root.title("Smart AI Campus")
+        self.root.configure(bg="#e3f2fd")
+
+        self.campus_lat = 13.663
+        self.campus_long = 79.4997
+
+        self.pdf_text = ""
+        self.uploaded_file_content = ""
+        self.users = {}  # To store registered users in memory
+        self.excel_file = "attendance_log.xlsx"  # Excel file for attendance
+        self.user_file = "users.txt"  # Notepad file for storing users
+
+        # Load users from users.txt into self.users
+        self.load_users_from_file()
+
+        self.qa_pipeline = pipeline("question-answering", model="distilbert-base-cased-distilled-squad")
+        self.summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
+
+        self.show_logo_page()
+
+    def load_users_from_file(self):
+        """Load usernames and passwords from users.txt into self.users."""
+        try:
+            if os.path.exists(self.user_file):
+                with open(self.user_file, 'r') as f:
+                    for line in f:
+                        if line.strip():
+                            username, password = line.strip().split(':')
+                            self.users[username] = password
+        except Exception as e:
+            print(f"Error loading users from {self.user_file}: {str(e)}")
+
+    def save_user_to_file(self, username, password):
+        """Save a new user to users.txt."""
+        try:
+            with open(self.user_file, 'a') as f:
+                f.write(f"{username}:{password}\n")
+        except Exception as e:
+            print(f"Error saving user to {self.user_file}: {str(e)}")
+
+    def show_logo_page(self):
+        self.clear_window()
+        try:
+            logo_img = Image.open("logo.jpeg")
+            logo_img = logo_img.resize((400, 300), Image.LANCZOS)
+            self.logo = ImageTk.PhotoImage(logo_img)
+            logo_label = Label(self.root, image=self.logo, bg="#e3f2fd")
+            logo_label.pack(expand=True)
+        except Exception:
+            Label(self.root, text="Smart AI Campus", font=("Helvetica", 24), bg="#e3f2fd").pack(expand=True)
+
+        self.root.after(3000, self.show_login_page)
+
+    def show_login_page(self):
+        self.clear_window()
+        Label(self.root, text="Login/Register", font=("Arial", 20, "bold"), bg="#e3f2fd").pack(pady=30)
+
+        self.username_entry = ttk.Entry(self.root, width=30)
+        self.username_entry.pack(pady=10)
+        self.username_entry.insert(0, "Username")
+
+        self.password_entry = ttk.Entry(self.root, show="*", width=30)
+        self.password_entry.pack(pady=10)
+        self.password_entry.insert(0, "Password")
+
+        self.login_status = Label(self.root, text="", bg="#e3f2fd", fg="red")
+        self.login_status.pack()
+
+        ttk.Button(self.root, text="Login", command=self.login).pack(pady=10)
+        ttk.Button(self.root, text="Register", command=self.register).pack(pady=5)
+
+    def login(self):
+        username = self.username_entry.get()
+        password = self.password_entry.get()
+        if username in self.users and self.users[username] == password:
+            self.current_user = username  # Store current user for attendance
+            self.login_status.config(text="Login successful ✅", fg="green")
+            self.root.after(1000, self.show_main_menu)
+        else:
+            self.login_status.config(text="Invalid credentials. Please register or try again.", fg="red")
+
+    def register(self):
+        username = self.username_entry.get()
+        password = self.password_entry.get()
+        if username in self.users:
+            self.login_status.config(text="Username already exists! Please login.", fg="red")
+        elif username and password:
+            self.users[username] = password
+            self.save_user_to_file(username, password)  # Save to users.txt
+            self.login_status.config(text="Registration successful ✅ Please log in.", fg="green")
+        else:
+            self.login_status.config(text="Username and password cannot be empty.", fg="red")
+
+    def show_main_menu(self):
+        self.clear_window()
+        main_frame = Frame(self.root, bg="#e3f2fd")
+        main_frame.pack(fill=BOTH, expand=True)
+
+        Label(main_frame, text="Smart AI Campus", font=("Helvetica", 24, "bold"), bg="#e3f2fd").pack(pady=(30, 10))
+
+        try:
+            img = Image.open("smart.jpeg")
+            img = img.resize((200, 200), Image.LANCZOS)
+            self.dashboard_img = ImageTk.PhotoImage(img)
+            Label(main_frame, image=self.dashboard_img, bg="#e3f2fd").pack(pady=(0, 5))
+        except Exception as e: 
+            Label(main_frame, text="Image not found", fg="red", bg="#e3f2fd").pack()
+
+        button_style = {"width": 30, "height": 2, "bg": "#ffffff", "bd": 1}
+
+        Button(main_frame, text="Mark Attendance", command=self.mark_attendance, **button_style).pack(pady=5)
+        Button(main_frame, text="PDF Doubt Solver", command=self.load_backend_pdfs, **button_style).pack(pady=5)
+        Button(main_frame, text="Notes Generator", command=self.generate_notes, **button_style).pack(pady=5)
+
+    def is_within_campus(self, user_lat, user_long, threshold_meters=200):
+        def haversine(lat1, lon1, lat2, lon2):
+
+            R = 6371000
+            phi1 = math.radians(lat1)
+            phi2 = math.radians(lat2)
+            dphi = math.radians(lat2 - lat1)
+            dlambda = math.radians(lon2 - lon1)
+            a = math.sin(dphi / 2)*2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2)*2
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            return R * c
+
+        distance = haversine(user_lat, user_long, self.campus_lat, self.campus_long)
+        return distance <= threshold_meters
+
+    def log_attendance_to_excel(self, username, status):
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        time_str = datetime.now().strftime("%H:%M:%S")
+        
+        # Data to log
+        attendance_data = {
+            "Username": [username],
+            "Date": [date_str],
+            "Time": [time_str],
+            "Status": [status]
+        }
+        
+        df_new = pd.DataFrame(attendance_data)
+        
+        # Check if Excel file exists
+        try:
+            if os.path.exists(self.excel_file):
+                df_existing = pd.read_excel(self.excel_file)
+                df_updated = pd.concat([df_existing, df_new], ignore_index=True)
+            else:
+                df_updated = df_new
+                
+            # Write to Excel
+            df_updated.to_excel(self.excel_file, index=False)
+        except Exception as e:
+            print(f"Error writing to Excel: {str(e)}")
+
+    def mark_attendance(self):
+        self.clear_window()
+        user_lat = 13.6639  # Example user latitude (modify as needed)
+        user_long = 79.4997  # Example user longitude (modify as needed)
+        
+        if self.is_within_campus(user_lat, user_long):
+            status = "Present"
+            message = "Attendance Marked as Present ✅"
+            color = "green"
+            self.log_attendance_to_excel(self.current_user, status)
+        else:
+            status = "Absent"
+            message = "Attendance Marked as Absent ❌ (Not on campus)"
+            color = "red"
+            self.log_attendance_to_excel(self.current_user, status)
+
+        Label(self.root, text=message, font=("Arial", 16), fg=color, bg="#e3f2fd").pack(pady=50)
+        Button(self.root, text="Back to Dashboard", command=self.show_main_menu).pack(pady=20)
+
+    def load_backend_pdfs(self):
+        file_path = r"C:\Users\THINKBOOK\OneDrive\Desktop\project\Basic_Engineering_QA.pdf"
+        if not self.pdf_text:
+            if os.path.isfile(file_path):
+                try:
+                    with open(file_path, 'rb') as f:
+                        reader = PyPDF2.PdfReader(f)
+                        self.pdf_text = "".join([page.extract_text() or "" for page in reader.pages])
+                except Exception as e:
+                    self.pdf_text = ""
+                    self.ask_question_interface()
+                    Label(self.root, text=f"Error loading PDF: {str(e)}", fg="red", bg="#e3f2fd").pack()
+                    return
+            else:
+                self.pdf_text = ""
+                self.ask_question_interface()
+                Label(self.root, text="PDF file not found", fg="red", bg="#e3f2fd").pack()
+                return
+        self.ask_question_interface()
+
+    def ask_question_interface(self):
+        self.clear_window()
+        Label(self.root, text="Ask your doubt", font=("Arial", 16, "bold"), bg="#e3f2fd").pack(pady=10)
+
+        self.doubt_entry = Entry(self.root, font=("Arial", 14), width=50)
+        self.doubt_entry.pack(pady=10)
+
+        Button(self.root, text="Ask", command=self.get_answer_from_pdf).pack(pady=5)
+
+        self.answer_box = Text(self.root, wrap=WORD, height=15)
+        self.answer_box.pack(fill=BOTH, expand=True, padx=20, pady=10)
+
+        Button(self.root, text="Back to Dashboard", command=self.show_main_menu).pack(pady=10)
+
+    def get_answer_from_pdf(self):
+        question = self.doubt_entry.get().strip()
+        if not question:
+            return
+
+        self.answer_box.delete(1.0, END)
+        self.answer_box.insert(END, "Processing...")
+
+        def process_answer():
+            try:
+                chunks = [chunk.strip() for chunk in self.pdf_text.split('\n\n') if chunk.strip()]
+                best_chunk = max(chunks, key=lambda x: sum(q in x.lower() for q in question.lower().split()), default="")
+                if best_chunk:
+                    answer = self.qa_pipeline(question=question, context=best_chunk)
+                    self.root.after(0, lambda: [self.answer_box.delete(1.0, END), self.answer_box.insert(END, f"Answer: {answer['answer']}")])
+                else:
+                    self.root.after(0, lambda: [self.answer_box.delete(1.0, END), self.answer_box.insert(END, "No relevant content found.")])
+            except Exception as e:
+                self.root.after(0, lambda: [self.answer_box.delete(1.0, END), self.answer_box.insert(END, f"Error: {str(e)}")])
+
+        threading.Thread(target=process_answer, daemon=True).start()
+
+    def generate_notes(self):
+        self.clear_window()
+        Label(self.root, text="Notes Generator", font=("Arial", 18, "bold"), bg="#e3f2fd").pack(pady=20)
+
+        Button(self.root, text="Upload File (PDF/TXT/DOCX)", command=self.load_file).pack(pady=10)
+        self.generate_button = Button(self.root, text="Generate", command=self.generate_summary, state=DISABLED)
+        self.generate_button.pack(pady=5)
+
+        self.result_box = Text(self.root, wrap=WORD)
+        self.result_box.pack(fill=BOTH, expand=True, padx=20, pady=10)
+
+        Button(self.root, text="Back to Dashboard", command=self.show_main_menu).pack(pady=10)
+
+    def load_file(self):
+        file_path = filedialog.askopenfilename(filetypes=[("Supported Files", "*.pdf *.txt *.docx")])
+        if not file_path:
+            return
+
+        try:
+            content = ""
+
+            if file_path.endswith(".pdf"):
+                with open(file_path, 'rb') as f:
+                    reader = PyPDF2.PdfReader(f)
+                    content = "".join([page.extract_text() or "" for page in reader.pages])
+
+            elif file_path.endswith(".txt"):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+            elif file_path.endswith(".docx"):
+                import docx
+                doc = docx.Document(file_path)
+                content = "\n".join([para.text for para in doc.paragraphs])
+
+            else:
+                self.result_box.delete(1.0, END)
+                self.result_box.insert(END, "Unsupported file type.")
+                return
+
+            self.uploaded_file_content = content.strip().replace("\n", " ")
+            self.result_box.delete(1.0, END)
+            self.result_box.insert(END, "File loaded successfully. Click 'Generate' to create notes.")
+            self.generate_button.config(state=NORMAL)
+
+        except Exception as e:
+            self.result_box.delete(1.0, END)
+            self.result_box.insert(END, f"Error loading file: {str(e)}")
+
+    def generate_summary(self):
+        if not self.uploaded_file_content:
+            self.result_box.delete(1.0, END)
+            self.result_box.insert(END, "No file loaded. Please upload a file first.")
+            return
+
+        self.result_box.delete(1.0, END)
+        self.result_box.insert(END, "Generating summary...")
+
+        def process_summary():
+            try:
+                content = self.uploaded_file_content
+                chunk_size = 1000
+                overlap = 100
+                step = chunk_size - overlap
+
+                summaries = []
+                for i in range(0, len(content), step):
+                    chunk = content[i:i + chunk_size]
+                    if len(chunk.strip()) < 100:
+                        continue
+                    summary = self.summarizer(chunk, max_length=100, min_length=30, do_sample=False)[0]['summary_text']
+                    summaries.append(summary)
+
+                full_summary = "\n\n".join(summaries)
+                self.root.after(0, lambda: [self.result_box.delete(1.0, END), self.result_box.insert(END, full_summary)])
+
+            except Exception as e:
+                self.root.after(0, lambda: [self.result_box.delete(1.0, END), self.result_box.insert(END, f"Error: {str(e)}")])
+
+        threading.Thread(target=process_summary, daemon=True).start()
+
+    def clear_window(self):
+        for widget in self.root.winfo_children():
+            widget.destroy()
+
+
+if _name_ == "_main_":
+    root = Tk()
+    app = StudentAssistApp(root)
+    root.mainloop()
