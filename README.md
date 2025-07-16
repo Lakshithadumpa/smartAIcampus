@@ -40,5 +40,5 @@ pip install pillow transformers pandas openpyxl pypdf2 python-docx
 🙋‍♀️ Author
 Lakshitha Dumpa
 📍 Annamacharya Institute of Technology & Science
-🔗 LinkedIn
-💻 GitHub
+🔗 LinkedIn : [Lakshitha](https://www.linkedin.com/in/dumpa-lakshitha-4720a3327/) 
+💻 GitHub : 
